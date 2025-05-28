@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Data files (optional - remove if you want to commit these)
+# *.json
+# *.csv
+
+# Backup files
+*_backup.csv
+*_backup.json
+
+# Temporary files
+*.tmp
+*.temp
+missing_fids*.csv
+fid_matches_found.csv
+check_*.py
+investigate_*.py
+fix_*.py
+update_*.py
+final_*.py
+verify_fids.py
+
+# Streamlit
+.streamlit/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
