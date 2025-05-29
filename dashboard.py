@@ -131,6 +131,7 @@ def load_data():
     df_fc['follower_count'] = pd.to_numeric(df_fc['follower_count'], errors='coerce')
     df_fc['following_count'] = pd.to_numeric(df_fc['following_count'], errors='coerce')
     df_fc['score'] = pd.to_numeric(df_fc['score'], errors='coerce')
+    df_fc['fid'] = pd.to_numeric(df_fc['fid'], errors='coerce')
     
     # Remove rows without timestamps (addresses not in transaction data)
     df_fc = df_fc.dropna(subset=['timestamp'])
@@ -993,6 +994,486 @@ def create_unknown_followers_timeline(df):
     
     return fig
 
+def create_high_fid_analysis(df):
+    """Create detailed analysis for FIDs above 1M split by 10K segments"""
+    # Filter for FIDs above 1M
+    df_high_fid = df[df['fid'] >= 1_000_000].copy()
+    
+    if len(df_high_fid) == 0:
+        st.info("No users with FID above 1M found.")
+        return None
+    
+    # Create 10K segments
+    df_high_fid['fid_segment'] = ((df_high_fid['fid'] - 1_000_000) // 10_000) * 10_000 + 1_000_000
+    
+    # Create figure with single column layout
+    fig = make_subplots(
+        rows=3, cols=1,
+        subplot_titles=[
+            'Distribution of FIDs Above 1M (10K Segments)',
+            'Average Score by FID Segment',
+            'Follower Distribution by FID Segment'
+        ],
+        row_heights=[0.4, 0.3, 0.3],
+        vertical_spacing=0.12
+    )
+    
+    # 1. Count by segment
+    segment_counts = df_high_fid.groupby('fid_segment').size().reset_index(name='count')
+    segment_counts['segment_label'] = segment_counts['fid_segment'].apply(
+        lambda x: f"{x/1000:.0f}K-{(x+10000)/1000:.0f}K"
+    )
+    
+    fig.add_trace(
+        go.Bar(
+            x=segment_counts['segment_label'],
+            y=segment_counts['count'],
+            marker_color='rgba(75, 0, 130, 0.7)',
+            text=segment_counts['count'],
+            textposition='auto',
+            hovertemplate='%{x}<br>Count: %{y}<extra></extra>',
+            showlegend=False
+        ),
+        row=1, col=1
+    )
+    
+    # 2. Average score by segment
+    segment_scores = df_high_fid.groupby('fid_segment').agg({
+        'score': 'mean',
+        'fid': 'count'
+    }).reset_index()
+    segment_scores['segment_label'] = segment_scores['fid_segment'].apply(
+        lambda x: f"{x/1000:.0f}K-{(x+10000)/1000:.0f}K"
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=segment_scores['segment_label'],
+            y=segment_scores['score'],
+            mode='lines+markers',
+            marker=dict(size=10, color='rgba(255, 127, 14, 0.8)'),
+            line=dict(color='rgba(255, 127, 14, 0.8)', width=3),
+            text=[f"Avg Score: {s:.3f}<br>Users: {c}" 
+                  for s, c in zip(segment_scores['score'], segment_scores['fid'])],
+            hovertemplate='%{text}<extra></extra>',
+            showlegend=False
+        ),
+        row=2, col=1
+    )
+    
+    # 3. Follower distribution by segment
+    follower_stats = df_high_fid.groupby('fid_segment').agg({
+        'follower_count': ['mean', 'median', 'std']
+    }).round(0)
+    follower_stats.columns = ['avg_followers', 'median_followers', 'std_followers']
+    follower_stats = follower_stats.reset_index()
+    follower_stats['segment_label'] = follower_stats['fid_segment'].apply(
+        lambda x: f"{x/1000:.0f}K-{(x+10000)/1000:.0f}K"
+    )
+    
+    # Create grouped bar chart
+    fig.add_trace(
+        go.Bar(
+            x=follower_stats['segment_label'],
+            y=follower_stats['avg_followers'],
+            name='Average',
+            marker_color='rgba(31, 119, 180, 0.7)',
+            offsetgroup=1,
+            text=[f"{v:,.0f}" for v in follower_stats['avg_followers']],
+            textposition='auto',
+            showlegend=True
+        ),
+        row=3, col=1
+    )
+    
+    fig.add_trace(
+        go.Bar(
+            x=follower_stats['segment_label'],
+            y=follower_stats['median_followers'],
+            name='Median',
+            marker_color='rgba(44, 160, 44, 0.7)',
+            offsetgroup=2,
+            text=[f"{v:,.0f}" for v in follower_stats['median_followers']],
+            textposition='auto',
+            showlegend=True
+        ),
+        row=3, col=1
+    )
+    
+    # Update axes
+    fig.update_xaxes(title_text="FID Segment", row=1, col=1)
+    fig.update_xaxes(title_text="FID Segment", row=2, col=1)
+    fig.update_xaxes(title_text="FID Segment", row=3, col=1)
+    
+    fig.update_yaxes(title_text="User Count", row=1, col=1)
+    fig.update_yaxes(title_text="Average Score", row=2, col=1)
+    fig.update_yaxes(title_text="Follower Count", row=3, col=1)
+    
+    # Apply minimalist theme
+    total_high_fid = len(df_high_fid)
+    avg_score = df_high_fid['score'].mean()
+    avg_followers = df_high_fid['follower_count'].mean()
+    
+    title = f"High FID Analysis (1M+): {total_high_fid:,} users<br><sub>Average Score: {avg_score:.3f} | Average Followers: {avg_followers:,.0f}</sub>"
+    apply_minimalist_theme(fig, title, height=900)
+    
+    # Update legend position
+    fig.update_layout(
+        legend=dict(x=0.02, y=0.15, bgcolor='rgba(255,255,255,0.8)', bordercolor='rgba(0,0,0,0.1)')
+    )
+    
+    # Additional statistics
+    st.markdown(f"""
+    **High FID (1M+) Statistics:**
+    - Total Users: {total_high_fid:,}
+    - FID Range: {df_high_fid['fid'].min():,.0f} to {df_high_fid['fid'].max():,.0f}
+    - Average Score: {avg_score:.3f}
+    - Average Followers: {avg_followers:,.0f}
+    - Total Segments: {len(segment_counts)}
+    """)
+    
+    return fig
+
+def create_recent_transactions_analysis(df):
+    """Analyze the last 1500 transactions"""
+    # Get the last 1500 transactions
+    df_recent = df.sort_values('datetime_pst').tail(1500).copy()
+    
+    # Calculate rolling averages for smoother visualization
+    df_recent['rolling_avg_followers'] = df_recent['follower_count'].rolling(window=50, min_periods=1).mean()
+    df_recent['rolling_avg_score'] = df_recent['score'].rolling(window=50, min_periods=1).mean()
+    df_recent['transaction_number'] = range(1, len(df_recent) + 1)
+    
+    # Calculate statistics for summary
+    avg_followers = df_recent['follower_count'].mean()
+    median_followers = df_recent['follower_count'].median()
+    avg_score = df_recent['score'].mean()
+    time_start = df_recent['datetime_pst'].min().strftime('%Y-%m-%d %H:%M')
+    time_end = df_recent['datetime_pst'].max().strftime('%Y-%m-%d %H:%M')
+    
+    # Display summary info in a centered box
+    st.markdown(f"""
+    <div style="background-color: #f0f2f6; padding: 20px; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+        <h4 style="margin: 0;">Time Range: {time_start} to {time_end} PST</h4>
+        <p style="margin: 10px 0 0 0; font-size: 16px;">
+            <strong>Avg Followers:</strong> {avg_followers:,.0f} | 
+            <strong>Median:</strong> {median_followers:,.0f} | 
+            <strong>Avg Score:</strong> {avg_score:.3f}
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Create subplots with more spacing
+    fig = make_subplots(
+        rows=3, cols=1,
+        subplot_titles=[
+            'Follower Count Distribution - Percentile Bands (Log Scale)',
+            'Score Distribution Over Last 1500 Transactions',
+            'FID Distribution Over Last 1500 Transactions (Focus on Higher FIDs)'
+        ],
+        row_heights=[0.25, 0.25, 0.50],
+        vertical_spacing=0.15
+    )
+    
+    # 1. Follower count distribution over time - using log scale and percentiles
+    # Calculate percentiles for better visualization
+    df_recent['follower_percentile'] = df_recent['follower_count'].rank(pct=True) * 100
+    
+    # Create rolling percentiles
+    window_size = 50
+    df_recent['rolling_p25'] = df_recent['follower_count'].rolling(window=window_size, min_periods=1).quantile(0.25)
+    df_recent['rolling_p50'] = df_recent['follower_count'].rolling(window=window_size, min_periods=1).quantile(0.50)
+    df_recent['rolling_p75'] = df_recent['follower_count'].rolling(window=window_size, min_periods=1).quantile(0.75)
+    df_recent['rolling_p90'] = df_recent['follower_count'].rolling(window=window_size, min_periods=1).quantile(0.90)
+    
+    # Add percentile bands
+    fig.add_trace(
+        go.Scatter(
+            x=df_recent['datetime_pst'],
+            y=df_recent['rolling_p90'],
+            mode='lines',
+            name='90th percentile',
+            line=dict(color='rgba(31, 119, 180, 0.3)', width=1),
+            showlegend=True
+        ),
+        row=1, col=1
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=df_recent['datetime_pst'],
+            y=df_recent['rolling_p75'],
+            mode='lines',
+            name='75th percentile',
+            line=dict(color='rgba(31, 119, 180, 0.5)', width=1),
+            fill='tonexty',
+            fillcolor='rgba(31, 119, 180, 0.1)',
+            showlegend=True
+        ),
+        row=1, col=1
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=df_recent['datetime_pst'],
+            y=df_recent['rolling_p50'],
+            mode='lines',
+            name='Median (50th)',
+            line=dict(color='#1f77b4', width=3),
+            showlegend=True
+        ),
+        row=1, col=1
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=df_recent['datetime_pst'],
+            y=df_recent['rolling_p25'],
+            mode='lines',
+            name='25th percentile',
+            line=dict(color='rgba(31, 119, 180, 0.5)', width=1),
+            fill='tonexty',
+            fillcolor='rgba(31, 119, 180, 0.1)',
+            showlegend=True
+        ),
+        row=1, col=1
+    )
+    
+    # Add scatter plot with size based on follower count
+    fig.add_trace(
+        go.Scatter(
+            x=df_recent['datetime_pst'],
+            y=df_recent['follower_count'],
+            mode='markers',
+            name='Individual users',
+            marker=dict(
+                size=np.log10(df_recent['follower_count'] + 1) * 3,  # Log scale for size
+                color=df_recent['score'],
+                colorscale='Viridis',
+                opacity=0.4,
+                line=dict(width=0)
+            ),
+            text=[f"User: {row['username']}<br>Followers: {row['follower_count']:,}<br>Score: {row['score']:.3f}" 
+                  for _, row in df_recent.iterrows()],
+            hovertemplate='%{text}<extra></extra>',
+            showlegend=True
+        ),
+        row=1, col=1
+    )
+    
+    # 2. Score spread - box plot over time windows
+    # Create 15 bins of 100 transactions each
+    df_recent['bin'] = pd.cut(df_recent['transaction_number'], bins=15, labels=False)
+    
+    for bin_num in range(15):
+        bin_data = df_recent[df_recent['bin'] == bin_num]
+        if len(bin_data) > 0:
+            # Calculate date range for this bin
+            bin_start = bin_data['datetime_pst'].min().strftime('%m/%d %H:%M')
+            bin_end = bin_data['datetime_pst'].max().strftime('%m/%d %H:%M')
+            fig.add_trace(
+                go.Box(
+                    y=bin_data['score'],
+                    name=f'{bin_start}<br>to<br>{bin_end}',
+                    marker_color='#2ca02c',
+                    showlegend=False
+                ),
+                row=2, col=1
+            )
+    
+    # 3. FID spread - with focus on higher FIDs
+    # Separate data by FID ranges
+    df_below_100k = df_recent[df_recent['fid'] <= 100_000]
+    df_100k_1m = df_recent[(df_recent['fid'] > 100_000) & (df_recent['fid'] < 1_000_000)]
+    df_above_1m = df_recent[df_recent['fid'] >= 1_000_000]
+    
+    # Add a single point at y=0 to represent all FIDs <= 100K
+    if len(df_below_100k) > 0:
+        # Create a summary point for all <= 100K FIDs
+        fig.add_trace(
+            go.Scatter(
+                x=[df_recent['datetime_pst'].min(), df_recent['datetime_pst'].max()],
+                y=[0, 0],
+                mode='lines',
+                name=f'FID ≤ 100K ({len(df_below_100k)} users)',
+                line=dict(color='lightgray', width=3),
+                showlegend=True
+            ),
+            row=3, col=1
+        )
+    
+    # FIDs 100K-1M (detailed spread)
+    if len(df_100k_1m) > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=df_100k_1m['datetime_pst'],
+                y=df_100k_1m['fid'],
+                mode='markers',
+                name='FID 100K-1M',
+                marker=dict(
+                    color=df_100k_1m['score'],
+                    colorscale='Blues',
+                    size=6,
+                    opacity=0.7,
+                    colorbar=dict(title="Score<br>(100K-1M)", x=1.02, len=0.3, y=0.35)
+                ),
+                text=[f"User: {row['username']}<br>Time: {row['datetime_pst'].strftime('%Y-%m-%d %H:%M:%S')}<br>FID: {row['fid']:,}<br>Score: {row['score']:.3f}" 
+                      for _, row in df_100k_1m.iterrows()],
+                hovertemplate='%{text}<extra></extra>',
+                showlegend=True
+            ),
+            row=3, col=1
+        )
+    
+    # FIDs >= 1M (detailed spread)
+    if len(df_above_1m) > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=df_above_1m['datetime_pst'],
+                y=df_above_1m['fid'],
+                mode='markers',
+                name='FID ≥ 1M',
+                marker=dict(
+                    color=df_above_1m['score'],
+                    colorscale='Reds',
+                    size=8,
+                    opacity=0.8,
+                    colorbar=dict(title="Score<br>(≥1M)", x=1.12, len=0.3, y=0.35)
+                ),
+                text=[f"User: {row['username']}<br>Time: {row['datetime_pst'].strftime('%Y-%m-%d %H:%M:%S')}<br>FID: {row['fid']:,}<br>Score: {row['score']:.3f}" 
+                      for _, row in df_above_1m.iterrows()],
+                hovertemplate='%{text}<extra></extra>',
+                showlegend=True
+            ),
+            row=3, col=1
+        )
+    
+    # Add trend lines for high FID groups
+    if len(df_100k_1m) > 5:
+        x_numeric = (df_100k_1m['datetime_pst'] - df_100k_1m['datetime_pst'].min()).dt.total_seconds()
+        z = np.polyfit(x_numeric, df_100k_1m['fid'], 1)
+        p = np.poly1d(z)
+        fig.add_trace(
+            go.Scatter(
+                x=df_100k_1m['datetime_pst'],
+                y=p(x_numeric),
+                mode='lines',
+                name='Trend 100K-1M',
+                line=dict(color='blue', dash='dash', width=2),
+                showlegend=False
+            ),
+            row=3, col=1
+        )
+    
+    if len(df_above_1m) > 5:
+        x_numeric = (df_above_1m['datetime_pst'] - df_above_1m['datetime_pst'].min()).dt.total_seconds()
+        z = np.polyfit(x_numeric, df_above_1m['fid'], 1)
+        p = np.poly1d(z)
+        fig.add_trace(
+            go.Scatter(
+                x=df_above_1m['datetime_pst'],
+                y=p(x_numeric),
+                mode='lines',
+                name='Trend ≥1M',
+                line=dict(color='red', dash='dash', width=2),
+                showlegend=False
+            ),
+            row=3, col=1
+        )
+    
+    # Add horizontal reference line at 1M only
+    fig.add_hline(y=1_000_000, line_dash="dot", line_color="gray", opacity=0.5, row=3, col=1)
+    
+    # Add annotation for 1M line
+    fig.add_annotation(
+        x=df_recent['datetime_pst'].min(),
+        y=1_000_000,
+        text="1M",
+        showarrow=False,
+        yshift=10,
+        row=3, col=1
+    )
+    
+    # Update axes
+    fig.update_xaxes(title_text="Date/Time (PST)", row=1, col=1)
+    fig.update_xaxes(title_text="Time Bins", row=2, col=1)
+    fig.update_xaxes(title_text="Date/Time (PST)", row=3, col=1)
+    
+    fig.update_yaxes(title_text="Follower Count (Log Scale)", type="log", row=1, col=1)
+    fig.update_yaxes(title_text="Score", row=2, col=1)
+    fig.update_yaxes(title_text="FID", row=3, col=1)
+    
+    # Set y-axis to start from 0 and show up to max FID
+    max_fid = df_recent['fid'].max()
+    fig.update_yaxes(range=[-50000, max_fid * 1.05], row=3, col=1)
+    
+    title = f"Last 1500 Transactions Analysis"
+    apply_minimalist_theme(fig, title, height=1300)
+    
+    # Update legend position for better visibility
+    fig.update_layout(
+        legend=dict(
+            x=1.02,
+            y=0.98,
+            xanchor='left',
+            yanchor='top',
+            bgcolor='rgba(255,255,255,0.9)',
+            bordercolor='rgba(0,0,0,0.1)',
+            borderwidth=1
+        )
+    )
+    
+    # Add additional statistics about timing
+    total_duration = df_recent['datetime_pst'].max() - df_recent['datetime_pst'].min()
+    hours = total_duration.total_seconds() / 3600
+    transactions_per_hour = 1500 / hours if hours > 0 else 0
+    
+    # Calculate FID distribution
+    fids_above_1_09m = len(df_recent[df_recent['fid'] > 1_090_000])
+    fids_below_1_09m = len(df_recent[df_recent['fid'] <= 1_090_000])
+    percent_above = (fids_above_1_09m / 1500) * 100
+    percent_below = (fids_below_1_09m / 1500) * 100
+    
+    # Additional FID breakdown for the focused ranges
+    fids_below_100k = len(df_recent[df_recent['fid'] <= 100_000])
+    fids_100k_1m = len(df_recent[(df_recent['fid'] > 100_000) & (df_recent['fid'] < 1_000_000)])
+    fids_above_1m = len(df_recent[df_recent['fid'] >= 1_000_000])
+    
+    # Calculate follower distribution for the last 1200
+    followers_0 = len(df_recent[df_recent['follower_count'] == 0])
+    followers_1_10 = len(df_recent[(df_recent['follower_count'] >= 1) & (df_recent['follower_count'] <= 10)])
+    followers_100_1k = len(df_recent[(df_recent['follower_count'] >= 100) & (df_recent['follower_count'] < 1000)])
+    followers_1k_10k = len(df_recent[(df_recent['follower_count'] >= 1000) & (df_recent['follower_count'] < 10000)])
+    followers_10k_plus = len(df_recent[df_recent['follower_count'] >= 10000])
+    followers_unknown = len(df_recent[df_recent['follower_count'].isna()])
+    
+    st.markdown(f"""
+    **Transaction Timing Statistics:**
+    - Total Duration: {hours:.1f} hours ({total_duration.days} days)
+    - Average Rate: {transactions_per_hour:.1f} transactions/hour
+    - Peak Hour: {df_recent.groupby(df_recent['datetime_pst'].dt.hour).size().idxmax()}:00 PST
+    - Most Active Day: {df_recent['datetime_pst'].dt.date.value_counts().index[0]}
+    
+    **FID Distribution (Account Age):**
+    - FIDs > 1.09M (Newer accounts): **{fids_above_1_09m:,}** ({percent_above:.1f}%)
+    - FIDs ≤ 1.09M (Older accounts): **{fids_below_1_09m:,}** ({percent_below:.1f}%)
+    
+    **FID Range Breakdown:**
+    - FIDs ≤ 100K: **{fids_below_100k}** ({fids_below_100k/15:.1f}%)
+    - FIDs 100K-1M: **{fids_100k_1m}** ({fids_100k_1m/15:.1f}%)
+    - FIDs ≥ 1M: **{fids_above_1m}** ({fids_above_1m/15:.1f}%)
+    
+    **Follower Distribution (Last 1500):**
+    - 0 followers: **{followers_0}** ({followers_0/15:.1f}%)
+    - 1-10 followers: **{followers_1_10}** ({followers_1_10/15:.1f}%)
+    - 100-1K followers: **{followers_100_1k}** ({followers_100_1k/15:.1f}%)
+    - 1K-10K followers: **{followers_1k_10k}** ({followers_1k_10k/15:.1f}%)
+    - 10K+ followers: **{followers_10k_plus}** ({followers_10k_plus/15:.1f}%)
+    - Unknown: **{followers_unknown}** ({followers_unknown/15:.1f}%)
+    """)
+    
+    return fig
+
 def create_geography_plot(df):
     """Create geographic distribution plot"""
     has_lat_long = df['latitude'].notna() & df['longitude'].notna()
@@ -1172,7 +1653,20 @@ def main():
     
     st.markdown("<br><br>", unsafe_allow_html=True)
     
-    st.header("🌍 7. Geographic Distribution")
+    st.header("🚀 7. High FID Analysis (1M+)")
+    fig7 = create_high_fid_analysis(df)
+    if fig7:
+        st.plotly_chart(fig7, use_container_width=True)
+    
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    
+    st.header("📈 8. Recent Transactions Analysis (Last 1500)")
+    fig8 = create_recent_transactions_analysis(df)
+    st.plotly_chart(fig8, use_container_width=True)
+    
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    
+    st.header("🌍 9. Geographic Distribution")
     
     # Geographic data completeness
     total_users = len(df)
@@ -1188,9 +1682,9 @@ def main():
     """)
     
     if has_lat_long.sum() > 0:
-        fig7 = create_geography_plot(df)
-        if fig7:
-            st.plotly_chart(fig7, use_container_width=True)
+        fig9 = create_geography_plot(df)
+        if fig9:
+            st.plotly_chart(fig9, use_container_width=True)
         
         # Country breakdown
         if has_country.sum() > 0:
